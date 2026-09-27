@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>分支剧情一致性审校台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🗺️</span>
+      <div>
+        <h1>分支剧情一致性审校台</h1>
+        <small>布尔前置条件 · 状态赋值 · 选项跳转 · 状态空间传播分析</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <select id="storySelect" title="切换剧情"></select>
+      <button id="btnNew" class="btn">＋ 新建剧情</button>
+      <button id="btnImport" class="btn">⬆ 导入 JSON</button>
+      <input type="file" id="fileInput" accept="application/json,.json" hidden />
+      <button id="btnExport" class="btn">⬇ 导出 JSON</button>
+      <button id="btnDelete" class="btn btn-danger" title="删除当前剧情">删除</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左栏：剧情结构 -->
+    <aside class="pane pane-left">
+      <section class="card">
+        <h2>剧情设置</h2>
+        <label class="field">
+          <span>标题</span>
+          <input type="text" id="storyTitle" placeholder="剧情标题" />
+        </label>
+        <label class="field">
+          <span>描述</span>
+          <textarea id="storyDesc" rows="2" placeholder="剧情简介（可留空）"></textarea>
+        </label>
+        <label class="field">
+          <span>起点场景</span>
+          <select id="startScene"></select>
+        </label>
+        <div class="field">
+          <span>布尔变量</span>
+          <div id="varList" class="var-list"></div>
+          <div class="inline-add">
+            <input type="text" id="newVarName" placeholder="新变量名，如 hasKey" />
+            <button id="btnAddVar" class="btn btn-small">添加</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card grow">
+        <div class="card-head">
+          <h2>场景列表</h2>
+          <button id="btnAddScene" class="btn btn-small">＋ 新场景</button>
+        </div>
+        <ul id="sceneList" class="scene-list"></ul>
+      </section>
+
+      <div class="save-bar">
+        <span id="saveStatus" class="save-status"></span>
+        <button id="btnSave" class="btn btn-primary">保存剧情</button>
+      </div>
+    </aside>
+
+    <!-- 中栏：场景编辑 -->
+    <section class="pane pane-center">
+      <div id="editorEmpty" class="empty-hint">
+        <p>← 从左侧选择一个场景开始编辑，或点击「＋ 新场景」</p>
+        <p class="muted">支持的条件语法：<code>a &amp;&amp; b</code>、<code>a || b</code>、<code>!a</code>、<code>(a || b) &amp;&amp; !c</code>；留空表示恒真。</p>
+      </div>
+      <div id="editor" class="editor" hidden>
+        <div class="editor-head">
+          <input type="text" id="sceneId" class="scene-id-input" spellcheck="false" />
+          <input type="text" id="sceneTitle" class="scene-title-input" placeholder="场景标题" />
+        </div>
+        <textarea id="sceneText" rows="4" placeholder="场景正文……"></textarea>
+
+        <div class="grid-2">
+          <label class="field">
+            <span>进入前置条件</span>
+            <input type="text" id="scenePre" placeholder="如 hasKey || witchHelp；留空恒真" spellcheck="false" />
+          </label>
+          <div class="field">
+            <span>进入时状态赋值</span>
+            <div id="sceneAssigns" class="assign-list"></div>
+            <button id="btnAddSceneAssign" class="btn btn-small">＋ 添加赋值</button>
+          </div>
+        </div>
+
+        <div class="options-head">
+          <h2>选项</h2>
+          <button id="btnAddOption" class="btn btn-small">＋ 添加选项</button>
+        </div>
+        <div id="optionList" class="option-list"></div>
+      </div>
+    </section>
+
+    <!-- 右栏：分析结果 -->
+    <aside class="pane pane-right">
+      <section class="card analysis-card">
+        <div class="card-head">
+          <h2>一致性分析</h2>
+          <button id="btnAnalyze" class="btn btn-small btn-primary">重新分析</button>
+        </div>
+
+        <div id="baselineBar" class="baseline-bar">
+          <button id="btnSaveBaseline" class="btn btn-small btn-primary">📌 保存分析基线</button>
+          <div id="baselineInfo" class="baseline-info"></div>
+        </div>
+
+        <div id="diffBar" class="diff-bar" hidden>
+          <div id="diffSummary" class="diff-summary"></div>
+          <div class="diff-actions">
+            <button id="btnRunCompare" class="btn btn-small">⇄ 运行对比</button>
+            <button id="btnClearBaseline" class="btn btn-small btn-danger">删除基线</button>
+          </div>
+          <div id="diffFilters" class="diff-filters"></div>
+          <div id="diffStale" class="diff-stale" hidden>⚠ 剧情已修改，当前对比结果可能过期，请重新「运行对比」</div>
+        </div>
+
+        <div id="analysisStats" class="stats"></div>
+        <ul id="issueList" class="issue-list"></ul>
+      </section>
+
+      <section id="pathQueryCard" class="card query-card" hidden>
+        <div class="card-head">
+          <h2>目标路径查询</h2>
+          <button id="btnRunPathQuery" class="btn btn-small btn-primary">查询路径</button>
+        </div>
+        <label class="field">
+          <span>目标场景</span>
+          <select id="pqTarget"></select>
+        </label>
+        <div class="field">
+          <span>到达时必须满足的变量（不添加则只要求到达目标场景）</span>
+          <div id="pqConstraints" class="assign-list"></div>
+          <button id="btnPqAddConstraint" class="btn btn-small">＋ 添加约束</button>
+        </div>
+        <div class="field">
+          <span>有序必经选项（按顺序依次经过；用 ↑↓ 调整次序）</span>
+          <div id="pqRequired" class="pq-opt-list"></div>
+          <button id="btnPqAddRequired" class="btn btn-small">＋ 添加必经选项</button>
+        </div>
+        <div class="field">
+          <span>禁用选项（查询时这些选项不可走，且不能与必经项重复）</span>
+          <div id="pqDisabled" class="pq-opt-list"></div>
+          <button id="btnPqAddDisabled" class="btn btn-small">＋ 添加禁用选项</button>
+        </div>
+        <div id="pqStale" class="diff-stale" hidden>⚠ 剧情或查询条件已修改，以下结果可能过期，请重新「查询路径」</div>
+        <div id="pqResult" class="pq-result"></div>
+      </section>
+
+      <section id="probCard" class="card prob-card" hidden>
+        <div class="card-head">
+          <h2>结局概率推演</h2>
+          <button id="btnRunProb" class="btn btn-small btn-primary">推演结局概率</button>
+        </div>
+        <div class="prob-hint">按选项权重（缺省为 1）在「场景 + 变量状态」图上精确求解：每个状态仅对条件成立且目标可进入的选项按权重归一化，含环图直接解方程，不做步数截断。</div>
+        <div id="probStale" class="diff-stale" hidden>⚠ 剧情已修改，以下结果可能过期，请重新「推演结局概率」</div>
+        <div id="probResult" class="prob-result"></div>
+      </section>
+
+      <section id="fcCard" class="card fc-card" hidden>
+        <div class="card-head">
+          <h2>结局必经抉择</h2>
+          <button id="btnRunForced" class="btn btn-small btn-primary">分析必经选项</button>
+        </div>
+        <div class="fc-hint">在「场景 + 完整变量状态」图上求每个可达终止场景的<b>全部到达路线共同经过</b>的选项（按稳定 UID）：含环与同场景多状态仍精确终止（标签数据流不动点，非固定深度枚举）；给出必经选项的先后次序与首次到达的最短见证路径，并可对任一选项请求绕开它仍到达该结局的反例路线。</div>
+        <div id="fcStale" class="diff-stale" hidden>⚠ 剧情或起点已修改，以下结果可能过期，请重新「分析必经选项」</div>
+        <div id="fcResult" class="fc-result"></div>
+      </section>
+
+      <section id="covCard" class="card cov-card" hidden>
+        <div class="card-head">
+          <h2>选项覆盖路线</h2>
+          <button id="btnRunCoverage" class="btn btn-small btn-primary">生成覆盖路线</button>
+        </div>
+        <div class="cov-hint">在「场景 + 变量状态」图上为每条实际可走的选项保留可复现路径，再用确定性贪心集合覆盖压缩成路线集；不可达 / 恒假 / 入口受阻 / 悬空的选项不计入覆盖分母。</div>
+        <div id="covStale" class="diff-stale" hidden>⚠ 剧情已修改，以下结果可能过期，请重新「生成覆盖路线」</div>
+        <div id="covResult" class="cov-result"></div>
+      </section>
+
+      <section id="fsCard" class="card fs-card" hidden>
+        <div class="card-head">
+          <h2>伏笔回收路线校验</h2>
+          <button id="btnRunForeshadow" class="btn btn-small btn-primary">运行校验</button>
+        </div>
+        <div class="fs-hint">选择一组<b>铺垫场景</b>与一组<b>回收场景</b>：沿「场景 + 完整变量状态」图把「待回收」标记并入遍历——每次进入铺垫场景即置为待回收，进入回收场景即清除；若到达可达设计结局时仍待回收，按选项步数展示最短违规路线与沿途变量状态。通过仅在完整探索、铺垫可达且存在可达设计结局时判定。</div>
+        <div class="field">
+          <span>铺垫场景（进入后伏笔置为待回收）</span>
+          <div id="fsSetups" class="pq-opt-list"></div>
+          <button id="btnFsAddSetup" class="btn btn-small">＋ 添加铺垫场景</button>
+        </div>
+        <div class="field">
+          <span>回收场景（进入后清除待回收标记）</span>
+          <div id="fsPayoffs" class="pq-opt-list"></div>
+          <button id="btnFsAddPayoff" class="btn btn-small">＋ 添加回收场景</button>
+        </div>
+        <div id="fsStale" class="diff-stale" hidden>⚠ 剧情或校验条件已修改，以下结果可能过期，请重新「运行校验」</div>
+        <div id="fsResult" class="fs-result"></div>
+      </section>
+
+      <section id="pacCard" class="card pac-card" hidden>
+        <div class="card-head">
+          <h2>节奏校验</h2>
+          <button id="btnRunPacing" class="btn btn-small btn-primary">运行校验</button>
+        </div>
+        <div class="pac-hint">勾选<b>高强度场景</b>（战斗、追逐、高潮戏等），并设置<b>允许的最长连续场景数</b>（1～10）：沿「场景 + 完整变量状态」图把「当前连续高强度计数」并入遍历——每次进入高强度场景计数 +1，进入非高强度场景即清零，环路中的连续段也会累计；若某条可走路线连续进入的高强度场景超过上限，按选项步数展示最短超限路线与沿途变量状态、连续计数。完整遍历且无超限才判通过；达到状态上限时标明无法判定。</div>
+        <div class="field">
+          <span>高强度场景（勾选后参与连续计数）</span>
+          <div id="pacScenes" class="pac-scene-list"></div>
+        </div>
+        <label class="field">
+          <span>允许的最长连续场景数（1～10）</span>
+          <input type="number" id="pacMax" class="pac-max-input" min="1" max="10" step="1" />
+        </label>
+        <div id="pacStale" class="diff-stale" hidden>⚠ 剧情或校验设置已修改，以下结果可能过期，请重新「运行校验」</div>
+        <div id="pacResult" class="pac-result"></div>
+      </section>
+
+      <section id="stgCard" class="card stg-card" hidden>
+        <div class="card-head">
+          <h2>结局保证到达</h2>
+          <button id="btnRunStrategy" class="btn btn-small btn-primary">检查可保证性</button>
+        </div>
+        <div class="stg-hint">选择一个<b>目标结局</b>（必须是无选项场景），并勾选<b>环境控制场景</b>（其余场景由玩家控制）：在「场景 + 完整变量状态」图上用最小不动点反向扩展求解——玩家状态至少一个后继已获胜即获胜，环境状态须有合法后继且<b>全部</b>后继已获胜才获胜；选项权重不参与判断。若存在玩家策略使环境任意选择合法选项都能在有限步内到达目标，列出每个获胜玩家状态的变量值、推荐选项 UID 与层级（推荐必进入更低层级）；<b>非目标死局与可无限停留的循环都不算成功</b>，无法保证时给出环境反制见证。</div>
+        <label class="field">
+          <span>目标结局（仅列出无选项的场景）</span>
+          <select id="stgTarget"></select>
+        </label>
+        <div class="field">
+          <span>环境控制场景（这些场景中的合法选项由环境任意选择；其余场景由玩家控制）</span>
+          <div id="stgEnvScenes" class="pac-scene-list"></div>
+        </div>
+        <div id="stgStale" class="diff-stale" hidden>⚠ 剧情或求解设置已修改，以下结果可能过期，请重新「检查可保证性」</div>
+        <div id="stgResult" class="stg-result"></div>
+      </section>
+
+      <section id="aaCard" class="card aa-card" hidden>
+        <div class="card-head">
+          <h2>变量赋值消费审计</h2>
+          <button id="btnRunAssignAudit" class="btn btn-small btn-primary">运行审计</button>
+        </div>
+        <div class="aa-hint">对当前草稿沿「场景 + 每变量最后赋值来源」状态图展开全部可走路线（含环必然终止），逐处审计<b>场景进入赋值</b>与<b>选项赋值</b>：写入的变量值在<b>再次被赋值或路线结束之前</b>是否被后续条件（选项条件 / 场景前置条件）引用。选项条件先于本选项赋值求值，目标场景进入赋值先于其前置条件求值；同一赋值位置在任意可达状态下被有效引用一次即算已消费，并给出到首次引用的最短可走路线；状态上限截断时未知项不会被判为未消费。</div>
+        <div id="aaStale" class="diff-stale" hidden>⚠ 剧情已修改，以下结果可能过期，请重新「运行审计」</div>
+        <div id="aaResult" class="aa-result"></div>
+      </section>
+
+      <section id="detailPanel" class="card detail-card" hidden>
+        <div class="card-head">
+          <h2 id="detailTitle">问题详情</h2>
+          <button id="btnCloseDetail" class="btn btn-small">✕</button>
+        </div>
+        <div id="detailStatus"></div>
+        <p id="detailMessage" class="detail-message"></p>
+        <div class="detail-section">
+          <h3>最接近的可达路径</h3>
+          <div id="detailPathTabs" class="path-tabs" hidden></div>
+          <div id="detailPath" class="path-view"></div>
+        </div>
+        <div id="detailUnmetWrap" class="detail-section" hidden>
+          <h3>未满足的条件</h3>
+          <div id="detailUnmet" class="unmet-view"></div>
+          <div id="detailFix" class="fix-hint"></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,207 @@
+{
+  "id": "adventure-demo",
+  "title": "失落王权（示例·含各类缺陷）",
+  "description": "一个教学用示例剧情，刻意包含：森林/村庄循环、城堡/女巫塔循环（验证含循环分析可终止）、不可达场景（地下地牢）、条件永不成立的选项（强行闯门，gateOpen 从未赋值）、悬空跳转（远古巨龙）、以及进入目标时前置条件恒不成立的侧门选项。选项带有正整数权重，可直接在右栏「结局概率推演」中查看各结局的到达概率与困在循环中的概率。",
+  "startScene": "village",
+  "variables": [
+    {
+      "name": "hasKey",
+      "description": "是否持有古老钥匙"
+    },
+    {
+      "name": "witchHelp",
+      "description": "女巫是否答应帮忙"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "village",
+      "title": "宁静村",
+      "text": "你站在宁静村的路口。北边是传闻藏有古老钥匙的黑暗森林，东边的官道通往国王城堡。",
+      "precondition": "",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-8e16cf3d96d272f1",
+          "text": "走进黑暗森林",
+          "condition": "",
+          "target": "forest",
+          "weight": 3,
+          "assigns": []
+        },
+        {
+          "uid": "opt-b730c7dea15e2925",
+          "text": "沿官道前往国王城堡",
+          "condition": "",
+          "target": "castle",
+          "weight": 2,
+          "assigns": []
+        }
+      ]
+    },
+    {
+      "id": "forest",
+      "title": "黑暗森林",
+      "text": "林木遮天蔽日。你可以在古树洞中摸索，也可以原路返回村庄。",
+      "precondition": "",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-fae13674842bb39f",
+          "text": "在古树洞中寻找古老钥匙",
+          "condition": "!hasKey",
+          "target": "forest",
+          "weight": 2,
+          "assigns": [
+            {
+              "variable": "hasKey",
+              "value": true
+            }
+          ]
+        },
+        {
+          "uid": "opt-54f35f57d8d734ba",
+          "text": "再检查一遍树洞",
+          "condition": "hasKey",
+          "target": "forest",
+          "weight": 1,
+          "assigns": []
+        },
+        {
+          "uid": "opt-fa3cd287dea68c0f",
+          "text": "返回村庄",
+          "condition": "",
+          "target": "village",
+          "weight": 2,
+          "assigns": []
+        }
+      ]
+    },
+    {
+      "id": "castle",
+      "title": "城堡大门",
+      "text": "厚重的城门紧闭。守卫要求出示钥匙，或者……你还有别的办法。",
+      "precondition": "",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-1e528cf26cf04a45",
+          "text": "强行撞开城门",
+          "condition": "gateOpen",
+          "target": "throneRoom",
+          "weight": 1,
+          "assigns": []
+        },
+        {
+          "uid": "opt-e84c6a9726e467cf",
+          "text": "出示古老钥匙",
+          "condition": "hasKey",
+          "target": "throneRoom",
+          "weight": 3,
+          "assigns": []
+        },
+        {
+          "uid": "opt-3169477b08ab7472",
+          "text": "前往女巫之塔寻求帮助",
+          "condition": "!witchHelp",
+          "target": "witchTower",
+          "weight": 2,
+          "assigns": []
+        },
+        {
+          "uid": "opt-8ddd8de24b7a342e",
+          "text": "从侧门溜进宝库",
+          "condition": "",
+          "target": "treasureRoom",
+          "weight": 1,
+          "assigns": [
+            {
+              "variable": "witchHelp",
+              "value": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "witchTower",
+      "title": "女巫之塔",
+      "text": "女巫被你的诚意打动，答应助你潜入城堡。",
+      "precondition": "",
+      "assigns": [
+        {
+          "variable": "witchHelp",
+          "value": true
+        }
+      ],
+      "options": [
+        {
+          "uid": "opt-9dff453bd7a9b672",
+          "text": "跟随女巫返回城堡",
+          "condition": "",
+          "target": "castle",
+          "assigns": []
+        }
+      ]
+    },
+    {
+      "id": "throneRoom",
+      "title": "王座厅",
+      "text": "宏伟的王座厅空无一人。失落的王权就在眼前。",
+      "precondition": "hasKey || witchHelp",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-ce9fddf2162834c3",
+          "text": "登上王座，结束冒险",
+          "condition": "",
+          "target": "ending",
+          "assigns": []
+        }
+      ]
+    },
+    {
+      "id": "treasureRoom",
+      "title": "宝库",
+      "text": "宝库大门需要同时持有钥匙且有女巫相助才能开启。",
+      "precondition": "hasKey && witchHelp",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-a4a309c990da4675",
+          "text": "带着宝物离开",
+          "condition": "",
+          "target": "village",
+          "assigns": []
+        }
+      ]
+    },
+    {
+      "id": "dungeon",
+      "title": "地下地牢",
+      "text": "潮湿的地下地牢。注意：剧情中没有任何选项指向这里，这是一段被遗忘的废弃内容。",
+      "precondition": "",
+      "assigns": [],
+      "options": []
+    },
+    {
+      "id": "ending",
+      "title": "终章：英雄传说",
+      "text": "你的名字被吟游诗人传唱。故事似乎还有续篇……",
+      "precondition": "",
+      "assigns": [],
+      "options": [
+        {
+          "uid": "opt-ea3378c1e507d22b",
+          "text": "挑战远古巨龙（未实装内容）",
+          "condition": "",
+          "target": "dragonLair",
+          "assigns": []
+        }
+      ]
+    }
+  ],
+  "baseline": null,
+  "createdAt": "2026-09-20T21:14:00.997Z",
+  "updatedAt": "2026-09-20T21:14:00.997Z"
+}

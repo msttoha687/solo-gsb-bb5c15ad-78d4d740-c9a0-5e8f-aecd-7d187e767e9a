@@ -1,0 +1,28 @@
+services:
+  story-auditor:
+    build: .
+    image: branching-story-auditor:latest
+    container_name: branching-story-auditor
+    ports:
+      - "3000:3000"
+    environment:
+      # 应用监听端口（容器内）
+      PORT: "3000"
+      # 首次启动且数据目录为空时，自动播种示例剧情；设为 false 可关闭
+      SEED_ON_START: "true"
+    volumes:
+      # 剧情 JSON 持久化到宿主机，容器重建不丢数据
+      - story-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      # 容器内 Node 探针（scripts/healthcheck.js，无第三方依赖）：
+      # 固定经 127.0.0.1 访问 /api/stories，规避 localhost 解析到 IPv6
+      # （::1）而服务只监听 0.0.0.0（IPv4）时 wget 误判 unhealthy 的问题。
+      # 仅当在超时内返回 2xx 且响应体为 JSON 数组时退出 0。
+      test: ["CMD", "node", "scripts/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  story-data:

@@ -1,0 +1,16 @@
+{
+  "name": "branching-story-auditor",
+  "version": "1.0.0",
+  "description": "分支剧情一致性审校 Web 应用：状态传播分析、不可达场景与死选项检测",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js && node test/baseline.js && node test/pathquery.js && node test/probability.js && node test/forcedchoice.js && node test/coverage.js && node test/replay.js && node test/foreshadow.js && node test/pacing.js && node test/strategy.js && node test/assignaudit.js && node test/healthcheck.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
