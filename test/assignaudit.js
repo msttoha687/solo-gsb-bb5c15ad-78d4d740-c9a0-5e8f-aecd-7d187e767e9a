@@ -4,6 +4,8 @@
 // 覆盖：基本消费 / 未消费、选项条件先于本选项赋值、目标场景赋值先于其前置条件、
 //       入口被挡仍算引用、选项赋值被目标前置消费、再次被赋值前未引用（def-use 精确）、
 //       条件求值为 false 也算引用、存在性规则（同一位置一次有效引用即消费）、
+//       短路语义（x||y 只读 x、x&&y 短路右侧、! 与嵌套括号、入口受阻前已读计入、
+//       仅被短路跳过的赋值未消费、首引路线指向真实读取处）、
 //       环路终止、不可达赋值（场景未进入 / 悬空选项）、状态上限截断（未知不判未消费）、
 //       起点受阻、参数校验（400）、语法错误容错、确定性、最短见证（更短替换）、
 //       初始值引用不消费、同列表后者覆盖前者、起点前置消费起点赋值、示例剧情、HTTP API。
@@ -221,6 +223,171 @@ const r9b = auditAssignments(st9b);
 const d9bx = defOf(r9b, (a) => a.kind === 'scene' && a.sceneId === 's' && a.variable === 'x');
 eq('对照组：唯一引用路线不存在 => 未消费', d9bx.status, 'unconsumed');
 
+// ---------- 短路语义：x || y 在 x=true 时只读取 x，y 不算被消费 ----------
+console.log('短路语义：|| 首个为真即短路（缺陷复现）');
+const stSC1 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: true }, { variable: 'y', value: true }],
+      options: [{ uid: 'o1', condition: 'x || y', target: 'b' }] },
+    { id: 'b', options: [] },
+  ],
+};
+const rSC1 = auditAssignments(stSC1);
+const sc1x = defOf(rSC1, (a) => a.variable === 'x');
+const sc1y = defOf(rSC1, (a) => a.variable === 'y');
+eq('x || y 实际读取 x：x 已消费', sc1x.status, 'consumed');
+eq('x 的首引指向真实读取处（a 的选项条件，深度 0）',
+  sc1x.reference.reader.kind === 'option-condition'
+  && sc1x.reference.reader.sceneId === 'a' && sc1x.reference.depth === 0, true);
+eq('x || y 短路：y 从未被实际读取 => 未消费（不得误判已消费）', sc1y.status, 'unconsumed');
+eq('未被读取的 y 无首引路线', sc1y.reference, null);
+eq('完整探索后判定（未消费而非未知）', rSC1.status, 'ok');
+eq('短路场景汇总：已消费 1、未消费 1',
+  rSC1.summary.consumed === 1 && rSC1.summary.unconsumed === 1, true);
+
+// x=false 时 || 继续求值右侧：x 与 y 都被读取
+const stSC1b = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: false }, { variable: 'y', value: true }],
+      options: [{ uid: 'o1', condition: 'x || y', target: 'b' }] },
+    { id: 'b', options: [] },
+  ],
+};
+const rSC1b = auditAssignments(stSC1b);
+eq('x=false 时 || 继续读 y：x 已被读', defOf(rSC1b, (a) => a.variable === 'x').status, 'consumed');
+eq('x=false 时 || 继续读 y：y 已被读', defOf(rSC1b, (a) => a.variable === 'y').status, 'consumed');
+
+// ---------- 短路语义：&& 首个为假即短路右侧 ----------
+console.log('短路语义：&& 首个为假即短路');
+const stSC2 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: false }, { variable: 'y', value: true }],
+      options: [
+        { uid: 'o1', condition: 'x && y', target: 'b' }, // 条件假但 x 已读，y 被短路
+        { uid: 'o2', target: 'c' },
+      ] },
+    { id: 'b', options: [] },
+    { id: 'c', options: [] },
+  ],
+};
+const rSC2 = auditAssignments(stSC2);
+eq('条件求值为 false 也算引用：x 已消费', defOf(rSC2, (a) => a.variable === 'x').status, 'consumed');
+eq('x && y 短路：y 未被读取 => 未消费', defOf(rSC2, (a) => a.variable === 'y').status, 'unconsumed');
+
+// x=true 时 && 继续求值右侧（即便结果为 false，y 也已被读）
+const stSC2b = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: true }, { variable: 'y', value: false }],
+      options: [{ uid: 'o1', condition: 'x && y', target: 'b' }] },
+    { id: 'b', options: [] },
+  ],
+};
+const rSC2b = auditAssignments(stSC2b);
+eq('x=true 时 && 继续读 y：y 已消费', defOf(rSC2b, (a) => a.variable === 'y').status, 'consumed');
+ok('y 被读时取值为 false（条件为假仍发生读取）',
+  defOf(rSC2b, (a) => a.variable === 'y').reference.stateAtRead.y === false);
+
+// ---------- 短路语义：! 不短路，嵌套与括号按真实求值顺序 ----------
+console.log('短路语义：! 与嵌套括号');
+const stSC3 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: false }, { variable: 'y', value: true }],
+      options: [{ uid: 'o1', condition: '!(x && y)', target: 'b' }] }, // x=false => 内层短路，y 不读
+    { id: 'b', options: [] },
+  ],
+};
+const rSC3 = auditAssignments(stSC3);
+eq('! 不短路其操作数：x 已读', defOf(rSC3, (a) => a.variable === 'x').status, 'consumed');
+eq('!(x&&y) 内层 x=false 短路：y 未读 => 未消费',
+  defOf(rSC3, (a) => a.variable === 'y').status, 'unconsumed');
+
+const stSC4 = {
+  startScene: 'a',
+  variables: ['x', 'y', 'z'],
+  scenes: [
+    { id: 'a',
+      assigns: [
+        { variable: 'x', value: true }, { variable: 'y', value: true },
+        { variable: 'z', value: true },
+      ],
+      options: [{ uid: 'o1', condition: '(x || z) && y', target: 'b' }] },
+    { id: 'b', options: [] },
+  ],
+};
+const rSC4 = auditAssignments(stSC4);
+eq('嵌套 (x||z)&&y：x 已读', defOf(rSC4, (a) => a.variable === 'x').status, 'consumed');
+eq('嵌套 (x||z)&&y：括号内 z 被 || 短路 => 未消费',
+  defOf(rSC4, (a) => a.variable === 'z').status, 'unconsumed');
+eq('嵌套 (x||z)&&y：括号为真后继续读 y => 已消费',
+  defOf(rSC4, (a) => a.variable === 'y').status, 'consumed');
+
+// ---------- 短路语义：入口受阻前已经执行的前置条件求值仍须计入 ----------
+console.log('短路语义：入口受阻前已执行的前置求值计入');
+const stSC5 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: false }, { variable: 'y', value: true }],
+      options: [{ uid: 'o1', target: 'b' }] },
+    { id: 'b', precondition: 'x && y', // x=false：入口受阻；x 已读，y 被短路
+      options: [{ uid: 'o2', target: 'c' }] },
+    { id: 'c', options: [] },
+  ],
+};
+const rSC5 = auditAssignments(stSC5);
+eq('受阻入口：前置条件求值已发生，x 已消费',
+  defOf(rSC5, (a) => a.variable === 'x').status, 'consumed');
+eq('受阻入口前置中被短路的 y 未读 => 未消费',
+  defOf(rSC5, (a) => a.variable === 'y').status, 'unconsumed');
+ok('b 从未进入但 x 的赋值已执行', defOf(rSC5, (a) => a.variable === 'x').reachable === true);
+
+// || 前置条件为真时短路右侧：只读到 x，y 不算消费
+const stSC6 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: true }, { variable: 'y', value: true }],
+      options: [{ uid: 'o1', target: 'b' }] },
+    { id: 'b', precondition: 'x || y', options: [] },
+  ],
+};
+const rSC6 = auditAssignments(stSC6);
+eq('通过入口的 || 前置只读 x：x 已消费',
+  defOf(rSC6, (a) => a.variable === 'x').status, 'consumed');
+eq('通过入口的 || 前置短路 y：y 未消费',
+  defOf(rSC6, (a) => a.variable === 'y').status, 'unconsumed');
+
+// ---------- 短路语义：存在性规则——某可达状态下真被读到即已消费 ----------
+console.log('短路语义：跨状态存在性仍成立');
+const stSC7 = {
+  startScene: 'a',
+  variables: ['x', 'y'],
+  scenes: [
+    { id: 'a', assigns: [{ variable: 'x', value: true }, { variable: 'y', value: true }],
+      options: [
+        { uid: 'o1', target: 's' },                                            // 保持 x=true
+        { uid: 'o2', target: 's', assigns: [{ variable: 'x', value: false }] }, // x=false
+      ] },
+    { id: 's', options: [{ uid: 'g', condition: 'x || y', target: 'e' }] },
+    { id: 'e', options: [] },
+  ],
+};
+const rSC7 = auditAssignments(stSC7);
+eq('x=true 路由短路 y，但 x=false 路由读到 y：y 已消费',
+  defOf(rSC7, (a) => a.kind === 'scene' && a.variable === 'y').status, 'consumed');
+ok('y 的首引路线真实可走且读取处在场景 s',
+  defOf(rSC7, (a) => a.kind === 'scene' && a.variable === 'y').reference.reader.sceneId === 's');
+
 // ---------- 环路：自环赋值被消费，遍历必然终止 ----------
 console.log('含环图：自环赋值消费且终止');
 const st10 = {
@@ -421,8 +588,17 @@ ok('森林找钥匙的选项赋值被消费',
   defOf(rDemo, (a) => a.kind === 'option' && a.sceneId === 'forest' && a.variable === 'hasKey').status === 'consumed');
 ok('女巫塔进入赋值被消费',
   defOf(rDemo, (a) => a.kind === 'scene' && a.sceneId === 'witchTower').status === 'consumed');
-ok('侧门选项赋值被宝库前置条件消费（即使入口被挡）',
-  defOf(rDemo, (a) => a.kind === 'option' && a.sceneId === 'castle').status === 'consumed');
+const demoSideDoor = defOf(rDemo, (a) => a.kind === 'option' && a.sceneId === 'castle');
+ok('侧门选项赋值被宝库前置条件消费（即使入口被挡）', demoSideDoor.status === 'consumed');
+// 短路修正后：王座厅前置 hasKey || witchHelp 在持钥匙时短路，不构成该赋值的引用；
+// 首次（也是唯一）真实读取发生在宝库前置 hasKey && witchHelp（需先从森林取得钥匙）
+eq('侧门赋值首引指向真实读取处（宝库前置，而非被 || 短路的王座厅）',
+  demoSideDoor.reference.reader.sceneId, 'treasureRoom');
+ok('侧门赋值首引路线先经森林取得钥匙',
+  demoSideDoor.reference.path.some((n) => n.kind === 'scene' && n.sceneId === 'forest'));
+ok('宝库前置读取时 hasKey=true 且 witchHelp=false（两合取支都被实际求值）',
+  demoSideDoor.reference.stateAtRead.hasKey === true
+  && demoSideDoor.reference.stateAtRead.witchHelp === false);
 
 // ---------- HTTP API ----------
 (async () => {

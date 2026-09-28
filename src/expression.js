@@ -120,6 +120,43 @@ function evalAst(node, state) {
   }
 }
 
+/**
+ * 按真实求值顺序（&& / || 短路）在给定状态下求值，并把求值过程中**实际读取**的
+ * 变量名追加到 out（被短路的子表达式不会求值，其中的变量不算被读取；变量在不同
+ * 分支被多次读取时会被追加多次，由调用方按需去重）。返回值与 evalAst 完全一致。
+ */
+function evalAstTracked(node, state, out) {
+  if (node === null) return true;
+  switch (node.op) {
+    case 'var':
+      out.push(node.name);
+      return !!state[node.name];
+    case 'not':
+      // ! 的操作数总是被求值（取反不产生短路）
+      return !evalAstTracked(node.arg, state, out);
+    case 'and': {
+      // 自左向右；首个 false 之后的合取支不再求值
+      let value = true;
+      for (const arg of node.args) {
+        value = evalAstTracked(arg, state, out);
+        if (value === false) return false;
+      }
+      return value;
+    }
+    case 'or': {
+      // 自左向右；首个 true 之后的析取支不再求值
+      let value = false;
+      for (const arg of node.args) {
+        value = evalAstTracked(arg, state, out);
+        if (value === true) return true;
+      }
+      return value;
+    }
+    default:
+      throw new Error(`未知 AST 节点: ${node.op}`);
+  }
+}
+
 /** 收集 AST 中引用的全部变量名 */
 function varsOf(node, out = new Set()) {
   if (node === null) return out;
@@ -347,9 +384,14 @@ function compile(raw) {
     ast,
     raw: (raw || '').trim(),
     evaluate: (state) => evalAst(ast, state),
+    /**
+     * 按真实求值顺序（短路）求值，并把实际读取的变量名追加到 out；
+     * 恒真条件（空表达式）不读取任何变量。
+     */
+    evaluateTracked: (state, out = []) => evalAstTracked(ast, state, out),
     vars: () => varsOf(ast),
     explain: (state, want = true) => explain(ast, state, want),
   };
 }
 
-module.exports = { parse, compile, evalAst, varsOf, explain };
+module.exports = { parse, compile, evalAst, evalAstTracked, varsOf, explain };
