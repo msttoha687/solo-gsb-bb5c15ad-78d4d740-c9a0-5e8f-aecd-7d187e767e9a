@@ -15,14 +15,20 @@
  *   - 悬空跳转（无目标 / 目标不存在）不构成边，其选项赋值不会执行；
  *   - 条件语法错误按恒真处理（与其余模块一致），记录到 conditionErrors。
  *
+ * **短路读取**：条件按 JavaScript 的 && / || / ! 短路语义自左向右真实求值，
+ * 只有求值过程中**实际读取**的变量才计入消费——`x || y` 在 x 为 true 时只读
+ * x（y 被短路，不会被记为消费），`x && y` 在 x 为 false 时只读 x；! 与括号
+ * 不改变短路顺序。读取只归到当时该变量「最后一次赋值」的来源 def；即使该次
+ * 求值整体为 false（选项不可走 / 入口被挡），求值中已经发生的读取仍然有效。
+ *
  * 实现：把「每个变量最后由哪处赋值写入」并入遍历去重键——
  *     状态键 = (场景 ID, 每个变量的最后赋值来源 def 向量)
  * 由于每处赋值写入的是常量，变量取值位图可由 def 向量直接推出；def 向量空间
  * 至多 ∏(该变量赋值位置数 + 1)，有限，因此含任意环路都必然终止（沿用约 100 万
- * 状态安全上限，超限截断）。BFS 过程中每次求值条件时，被引用变量当前的来源 def
- * 即被“消费”一次；同一赋值位置在不同可达状态下**只要存在一次有效引用即算已消费**。
- * 首次引用按选项步数取最短（BFS 逐层展开 + 更短见证替换），并为已消费项重建
- * 到首次引用的最短可走路线。
+ * 状态安全上限，超限截断）。BFS 过程中每次求值条件时，按真实短路顺序被读取的
+ * 变量当前的来源 def 即被“消费”一次；同一赋值位置在不同可达状态下**只要存在
+ * 一次有效引用即算已消费**。首次引用按选项步数取最短（BFS 逐层展开 + 更短见证
+ * 替换），并为已消费项重建到首次引用的最短可走路线。
  *
  * 截断安全：状态上限截断时，尚未被证实消费的赋值一律标记为 **unknown（未知）**，
  * 绝不能判为“未消费”；已被证实的消费结论仍然确凿（路线真实可走）。
@@ -70,14 +76,11 @@ function auditAssignments(storyInput, opts = {}) {
   const sceneAssignDefs = new Map(); // sceneId -> [defId,...]（按赋值书写顺序）
   const optionAssignDefs = new Map(); // `${sceneId}#${idx}` -> [defId,...]
   const sceneCond = new Map();       // sceneId -> compiled | null
-  const sceneCondVars = new Map();   // sceneId -> [var,...]
   const optionCond = new Map();      // optKey -> compiled | null
-  const optionCondVars = new Map();  // optKey -> [var,...]
 
   for (const scene of sceneMap.values()) {
     const pc = safeCompile(scene.precondition, `场景 "${scene.id}" 的前置条件`);
     sceneCond.set(scene.id, pc);
-    sceneCondVars.set(scene.id, pc ? [...pc.vars()] : []);
 
     const sIds = [];
     (scene.assigns || []).filter((a) => a && a.variable).forEach((a, ai) => {
@@ -94,7 +97,6 @@ function auditAssignments(storyInput, opts = {}) {
       const optKey = `${scene.id}#${idx}`;
       const oc = safeCompile(opt && opt.condition, `场景 "${scene.id}" 选项 ${idx + 1} 的条件`);
       optionCond.set(optKey, oc);
-      optionCondVars.set(optKey, oc ? [...oc.vars()] : []);
       const oIds = [];
       ((opt && opt.assigns) || []).filter((a) => a && a.variable).forEach((a, ai) => {
         const id = defs.length + 1;
@@ -140,7 +142,7 @@ function auditAssignments(storyInput, opts = {}) {
   let transitionCount = 0;
 
   const reachedDefs = new Set();  // 至少执行过一次的赋值位置
-  const consumedBest = new Map(); // defId -> { readDepth, stateKey, reader, edge, stateAtRead }
+  const consumedBest = new Map(); // defId -> { readDepth, stateKey, reader, edge, stateAtRead, readVars, skippedVars }
   const sceneEntered = new Set(); // 成功进入过的场景
 
   const keyOf = (sceneId, vec) => `${sceneId}\x00${vec.join(',')}`;
@@ -156,19 +158,39 @@ function auditAssignments(storyInput, opts = {}) {
     return true;
   };
 
-  // 记录一次条件求值中的引用：readerVars 里每个变量当前的来源 def 即被消费。
-  // 同一 def 只保留选项步数最短的见证（BFS 逐层展开，发现更短见证时替换）。
-  const markReads = (vec, readerVars, readDepth, stateKey, reader, edge, stateAtRead) => {
-    for (const v of readerVars) {
+  // 一次条件求值后，按真实短路顺序记录其中的引用：
+  // reads 只包含本次求值**实际读取**的变量（被 &&/|| 短路跳过的子式变量不在其中），
+  // 每个被读变量当前的来源 def 即被消费。同一 def 只保留选项步数最短的见证
+  //（BFS 逐层展开，发现更短见证时替换）。
+  const markReads = (vec, reads, compiled, readDepth, stateKey, reader, edge, stateAtRead) => {
+    // 同一条件里重复读取同一变量只计一次，保留首次读取顺序
+    const readVars = [];
+    for (const v of reads) {
+      if (!readVars.includes(v)) readVars.push(v);
+    }
+    // 条件中出现、但本次被短路跳过的变量（仅用于见证展示，不构成消费）
+    const skippedVars = compiled
+      ? [...compiled.vars()].filter((v) => !readVars.includes(v))
+      : [];
+    for (const v of readVars) {
       const slot = slotOfVar.get(v);
       if (slot === undefined) continue; // 从未被任何赋值设置的变量：读到的是初始值
       const defId = vec[slot];
       if (!defId) continue;             // 初始值（尚未被任何赋值写入）
       const rec = consumedBest.get(defId);
       if (!rec || readDepth < rec.readDepth) {
-        consumedBest.set(defId, { readDepth, stateKey, reader, edge, stateAtRead });
+        consumedBest.set(defId, { readDepth, stateKey, reader, edge, stateAtRead, readVars, skippedVars });
       }
     }
+  };
+
+  // 按真实短路顺序求条件并记录读取：语法错误按恒真处理（无任何读取），
+  // 返回条件取值（供调用方决定选项是否可走 / 入口是否被挡）。
+  const evalAndMark = (compiled, state, vec, readDepth, stateKey, reader, edge) => {
+    if (!compiled) return true;
+    const { value, reads } = compiled.evaluateTracked(state);
+    markReads(vec, reads, compiled, readDepth, stateKey, reader, edge, state);
+    return value;
   };
 
   // ---- 起点：初始 def 向量全 0（全部初始值），先执行起点场景的进入赋值 ----
@@ -179,7 +201,10 @@ function auditAssignments(storyInput, opts = {}) {
   }
   const startState = deriveState(startVec);
   const startPc = sceneCond.get(story.startScene);
-  const startBlocked = !!(startPc && !startPc.evaluate(startState));
+  // 起点前置条件在起点进入赋值之后、按真实短路顺序求值；即使结果为假（起点受阻），
+  // 求值中已经发生的读取也会被记录——但起点受阻时审计整体不产出逐项结果。
+  const startValue = startPc ? startPc.evaluateTracked(startState) : { value: true, reads: [] };
+  const startBlocked = !startValue.value;
 
   const base = {
     startScene: story.startScene,
@@ -207,8 +232,8 @@ function auditAssignments(storyInput, opts = {}) {
   const startKey = keyOf(story.startScene, startVec);
   offer(story.startScene, startVec, 0, null, null);
   sceneEntered.add(story.startScene);
-  // 起点前置条件在起点进入赋值之后求值：其中的引用消费起点赋值
-  markReads(startVec, sceneCondVars.get(story.startScene), 0, startKey, {
+  // 记录起点前置条件求值中按真实短路顺序发生的读取（消费起点进入赋值）
+  markReads(startVec, startValue.reads, startPc, 0, startKey, {
     kind: 'scene-precondition',
     sceneId: story.startScene,
     sceneTitle: (sceneMap.get(story.startScene) || {}).title || '',
@@ -225,8 +250,8 @@ function auditAssignments(storyInput, opts = {}) {
     (scene.options || []).forEach((option, idx) => {
       if (truncated) return;
       const optKey = `${cur.sceneId}#${idx}`;
-      // 1) 选项条件先于本选项赋值求值：条件中的引用消费当前来源
-      markReads(cur.vec, optionCondVars.get(optKey), cur.depth, curKey, {
+      // 1) 选项条件先于本选项赋值、按真实短路顺序求值：条件中实际读到的引用消费当前来源
+      const reader = {
         kind: 'option-condition',
         sceneId: cur.sceneId,
         sceneTitle: (sceneMap.get(cur.sceneId) || {}).title || '',
@@ -234,10 +259,10 @@ function auditAssignments(storyInput, opts = {}) {
         optionUid: (option && option.uid) || null,
         optionText: (option && option.text) || '',
         condition: ((option && option.condition) || '').trim(),
-      }, null, state);
-      // 2) 条件不成立：此具体状态下该选项不可走
-      const oc = optionCond.get(optKey);
-      if (oc && !oc.evaluate(state)) return;
+      };
+      const condValue = evalAndMark(optionCond.get(optKey), state, cur.vec, cur.depth, curKey, reader, null);
+      // 2) 条件不成立：此具体状态下该选项不可走（条件求值中的读取已经计入）
+      if (!condValue) return;
       // 3) 悬空跳转：不构成边，其赋值不会执行
       const targetId = ((option && option.target) || '').trim();
       if (!targetId || !sceneMap.has(targetId)) return;
@@ -261,16 +286,16 @@ function auditAssignments(storyInput, opts = {}) {
         target: targetId,
         targetTitle: (sceneMap.get(targetId) || {}).title || '',
       };
-      // 6) 目标场景前置条件求值：其中的引用消费赋值后的来源（即使入口被挡，引用也已发生）
-      markReads(newVec, sceneCondVars.get(targetId), cur.depth + 1, curKey, {
+      // 6) 目标场景前置条件按真实短路顺序求值：实际读到的引用消费赋值后的来源
+      //（即使入口被挡，求值中已经发生的读取仍须计入）
+      const pcValue = evalAndMark(sceneCond.get(targetId), nextState, newVec, cur.depth + 1, curKey, {
         kind: 'scene-precondition',
         sceneId: targetId,
         sceneTitle: (sceneMap.get(targetId) || {}).title || '',
         condition: (sceneMap.get(targetId).precondition || '').trim(),
-      }, edge, nextState);
+      }, edge);
       // 7) 入口前置不成立：不构成边
-      const tc = sceneCond.get(targetId);
-      if (tc && !tc.evaluate(nextState)) return;
+      if (!pcValue) return;
       const offered = offer(targetId, newVec, cur.depth + 1, curKey, edge);
       if (offered) {
         transitionCount++;
@@ -336,6 +361,10 @@ function auditAssignments(storyInput, opts = {}) {
         variable: def.variable,
         depth: rec.readDepth,
         reader: rec.reader,
+        // 该次条件求值中按真实短路顺序实际读取的变量（去重、保留首次读取次序）
+        readVariables: rec.readVars,
+        // 条件中出现但被短路跳过、当次未读取的变量
+        skippedVariables: rec.skippedVars,
         path,
         stateAtRead: rec.stateAtRead,
       };

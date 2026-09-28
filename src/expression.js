@@ -120,6 +120,40 @@ function evalAst(node, state) {
   }
 }
 
+/**
+ * 按真实短路求值顺序求 AST，并把求值过程中**实际读取**的变量按读取先后
+ * 推入 reads（同一变量重复出现会重复记录，由调用方按需去重）。
+ * 短路语义与 evalAst 完全一致（也即 JavaScript 运行时语义）：
+ *   - && 自左向右逐个求值，一旦某子式为 false，剩余子式不再求值；
+ *   - || 自左向右逐个求值，一旦某子式为 true，剩余子式不再求值；
+ *   - ! 只对子式结果取反，子式仍正常求值，不改变短路行为；
+ *   - 括号只改变结合方式，不影响读取顺序。
+ * 返回条件在 state 下的布尔值。
+ */
+function evalAstTracked(node, state, reads) {
+  if (node === null) return true;
+  switch (node.op) {
+    case 'var':
+      reads.push(node.name);
+      return !!state[node.name];
+    case 'not':
+      return !evalAstTracked(node.arg, state, reads);
+    case 'and': {
+      for (const n of node.args) {
+        if (!evalAstTracked(n, state, reads)) return false; // 短路：右侧不再读取
+      }
+      return true;
+    }
+    case 'or': {
+      for (const n of node.args) {
+        if (evalAstTracked(n, state, reads)) return true;   // 短路：右侧不再读取
+      }
+      return false;
+    }
+    default: throw new Error(`未知 AST 节点: ${node.op}`);
+  }
+}
+
 /** 收集 AST 中引用的全部变量名 */
 function varsOf(node, out = new Set()) {
   if (node === null) return out;
@@ -347,9 +381,19 @@ function compile(raw) {
     ast,
     raw: (raw || '').trim(),
     evaluate: (state) => evalAst(ast, state),
+    /**
+     * 按真实短路顺序求值，返回 { value, reads }：
+     * reads 为求值中实际读取的变量名（按读取先后、保留重复出现），
+     * 被 && / || 短路跳过的子式中的变量不会出现。
+     */
+    evaluateTracked: (state) => {
+      const reads = [];
+      const value = evalAstTracked(ast, state, reads);
+      return { value, reads };
+    },
     vars: () => varsOf(ast),
     explain: (state, want = true) => explain(ast, state, want),
   };
 }
 
-module.exports = { parse, compile, evalAst, varsOf, explain };
+module.exports = { parse, compile, evalAst, evalAstTracked, varsOf, explain };

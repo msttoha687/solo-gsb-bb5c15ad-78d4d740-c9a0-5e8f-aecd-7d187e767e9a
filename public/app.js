@@ -3002,6 +3002,21 @@ function buildAssignAuditPathView(ref, knownVars) {
       + `（${reader.condition || ''}）引用变量 ${ref.variable}`;
   head.append(badge, text);
   div.appendChild(head);
+  // 短路语义：按真实求值顺序列出实际读取的变量；被 && / || 短路跳过的变量单列
+  const readVars = ref.readVariables || [ref.variable];
+  const skipLine = document.createElement('div');
+  skipLine.className = 'aa-read-order';
+  const readSpan = document.createElement('span');
+  readSpan.className = 'aa-reads';
+  readSpan.textContent = `实际读取（按求值顺序）：${readVars.join('、')}`;
+  skipLine.appendChild(readSpan);
+  if (ref.skippedVariables && ref.skippedVariables.length) {
+    const skipSpan = document.createElement('span');
+    skipSpan.className = 'aa-skips';
+    skipSpan.textContent = `短路未读：${ref.skippedVariables.join('、')}`;
+    skipLine.appendChild(skipSpan);
+  }
+  div.appendChild(skipLine);
   if (ref.stateAtRead) {
     div.insertAdjacentHTML('beforeend', stateChips(ref.stateAtRead, knownVars || []));
   }

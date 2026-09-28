@@ -597,6 +597,10 @@ code {
 .aa-reason { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 .aa-ref-node { background: var(--ok-bg); border: 1px solid #bfe3c8; }
 .aa-ref-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.aa-read-order { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; font-size: 11.5px; }
+.aa-read-order .aa-reads { color: #1e7a46; }
+.aa-read-order .aa-skips { color: var(--muted); }
+.aa-read-order .aa-skips::before { content: '｜'; color: var(--border); }
 .aa-result .path-node .badge,
 .aa-result .path-edge .badge { margin-left: 4px; }
 
